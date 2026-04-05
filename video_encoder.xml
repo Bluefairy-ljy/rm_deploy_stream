@@ -1,0 +1,7 @@
+<library path="lib/libvideo_encoder_nodelet">
+  <class name="rm_deploy_stream/VideoEncoderNodelet"
+         type="rm_deploy_stream::VideoEncoderNodelet"
+         base_class_type="nodelet::Nodelet">
+    <description>HK video encoder nodelet</description>
+  </class>
+</library>

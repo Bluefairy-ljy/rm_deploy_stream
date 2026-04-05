@@ -53,7 +53,7 @@ SerialSenderNode::SerialSenderNode() : nh_()
   int baudrate = nh_.param<int>("rm_deploy_stream/baudrate", 921600);
   packet_size_ = nh_.param<int>("rm_deploy_stream/packet_size", 300);
   // 订阅者
-  video_packet_sub_ = nh_.subscribe("/video_packet", 10, &SerialSenderNode::VideoPacketCB, this);
+  video_packet_sub_ = nh_.subscribe("/video_stream", 10, &SerialSenderNode::VideoPacketCB, this);
   // 打开串口
   serial_.setPort(serial_port);
   serial_.setBaudrate(baudrate);
@@ -65,8 +65,8 @@ SerialSenderNode::SerialSenderNode() : nh_()
   }
   catch (serial::IOException& e)
   {
-    ros::shutdown();
-    return;
+    ROS_ERROR("Failed to open serial port %s! Error: %s", serial_port.c_str(), e.what());
+    throw std::runtime_error("Serial port initialization failed.");
   }
   ROS_INFO("SerialSenderNode started on %s @ %d baudrate", serial_port.c_str(), baudrate);
 }
