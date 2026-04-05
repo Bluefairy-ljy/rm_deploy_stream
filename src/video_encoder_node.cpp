@@ -371,7 +371,8 @@ void VideoEncoderCore::pullStreamAndPacketize()
         if (sent_window_bytes_ + packet_bytes > window_limit_bytes) break;
 
         rm_deploy_stream::VideoPacket pkt;
-        pkt.seq = packet_sequence_id_++;
+        pkt.seq = static_cast<uint32_t>(packet_sequence_id_ & 0xFFu);
+        packet_sequence_id_++;
         pkt.timestamp_ns = static_cast<uint64_t>(now_ns);
         pkt.data.fill(0);
         std::memcpy(pkt.data.data(), stream_buffer_.data(), packet_size_);
