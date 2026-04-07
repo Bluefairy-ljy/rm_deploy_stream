@@ -1,4 +1,0 @@
-rm_deploy_stream:
-  serial_port: "/dev/ttyUSB0"
-  baudrate: 921600
-  packet_size: 300

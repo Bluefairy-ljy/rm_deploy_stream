@@ -43,7 +43,6 @@ include_directories(
 
 add_library(rm_deploy_stream_core
   src/video_encoder_node.cpp
-  src/serial_sender_node.cpp
 )
 target_link_libraries(rm_deploy_stream_core
   ${catkin_LIBRARIES}
