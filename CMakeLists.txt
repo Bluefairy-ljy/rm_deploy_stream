@@ -10,13 +10,17 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   sensor_msgs
   std_msgs
-  serial
   message_generation
 )
-set(OpenCV_DIR /usr/lib/x86_64-linux-gnu/cmake/opencv4)
+
 find_package(OpenCV REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(Protobuf REQUIRED)
+
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
+pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libavformat libswscale)
+
+PROTOBUF_GENERATE_CPP(PROTO_SRCS PROTO_HDRS proto/referee.proto)
 
 add_message_files(
   FILES
@@ -24,14 +28,12 @@ add_message_files(
 )
 
 generate_messages(
-  DEPENDENCIES
-  std_msgs
+  DEPENDENCIES std_msgs
 )
 
 catkin_package(
   INCLUDE_DIRS include
-  LIBRARIES rm_deploy_stream_core rm_deploy_stream_nodelet
-  CATKIN_DEPENDS roscpp nodelet image_transport cv_bridge sensor_msgs std_msgs serial message_runtime
+  CATKIN_DEPENDS roscpp cv_bridge sensor_msgs std_msgs message_runtime
 )
 
 include_directories(
@@ -39,22 +41,28 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${GST_INCLUDE_DIRS}
+  ${FFMPEG_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}
+  ${PROTOBUF_INCLUDE_DIR}
 )
 
 add_library(rm_deploy_stream_core
   src/video_encoder_node.cpp
+  src/video_decoder_node.cpp
+  ${PROTO_SRCS}
 )
+add_dependencies(rm_deploy_stream_core ${${PROJECT_NAME}_EXPORTED_TARGETS})
+
 target_link_libraries(rm_deploy_stream_core
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
   ${GST_LIBRARIES}
+  ${FFMPEG_LIBRARIES}
+  ${PROTOBUF_LIBRARIES}
 )
-add_dependencies(rm_deploy_stream_core ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_library(rm_deploy_stream_nodelet src/video_encoder_nodelet.cpp)
-target_link_libraries(rm_deploy_stream_nodelet rm_deploy_stream_core ${catkin_LIBRARIES})
-add_dependencies(rm_deploy_stream_nodelet ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_executable(video_encoder src/video_encoder_main.cpp)
+target_link_libraries(video_encoder rm_deploy_stream_core)
 
-add_executable(rm_deploy_stream_main src/main.cpp)
-target_link_libraries(rm_deploy_stream_main rm_deploy_stream_core ${catkin_LIBRARIES})
-add_dependencies(rm_deploy_stream_main ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_executable(video_decoder src/video_decoder_main.cpp)
+target_link_libraries(video_decoder rm_deploy_stream_core)

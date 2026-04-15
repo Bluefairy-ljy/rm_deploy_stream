@@ -3,14 +3,10 @@
 
 int main(int argc, char** argv)
 {
-  ros::init(argc, argv, "rm_deploy_stream");
+  ros::init(argc, argv, "video_encoder");
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
   rm_deploy_stream::VideoEncoderCore core(nh, pnh);
-
-  ros::AsyncSpinner spinner(3);
-  spinner.start();
-  ROS_INFO("All nodes started, spinning...");
-  ros::waitForShutdown();
+  ros::spin();
   return 0;
 }

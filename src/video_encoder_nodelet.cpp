@@ -15,6 +15,7 @@ public:
   {
     core_.reset(new VideoEncoderCore(getNodeHandle(), getPrivateNodeHandle()));
   }
+
 private:
   std::unique_ptr<VideoEncoderCore> core_;
 };
