@@ -120,8 +120,8 @@ void VideoEncoderCore::initializeGstreamer()
   const bool low_bitrate_mode = (target_bitrate_ <= 80);
   const int key_int = std::max(8 * output_fps_, 30);
 
-  g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int, "aud", TRUE,
-               nullptr);
+  g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int,
+               "repeat-headers", TRUE, nullptr);
 
   if (low_bitrate_mode)
   {
@@ -411,26 +411,25 @@ void VideoEncoderCore::pullStreamAndPacketize()
       }
 
       // 背压处理：缓冲区积压超过阈值时丢掉部分数据
-      if (stream_buffer_.size() > max_backlog_bytes)
-      {
-        size_t target_drop = stream_buffer_.size() - max_backlog_bytes;
-        size_t drop_bytes = target_drop;
-        for (size_t i = target_drop; i + 4 < stream_buffer_.size(); ++i)
-        {
-          bool sc3 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 1;
-          bool sc4 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 0 &&
-                     stream_buffer_[i + 3] == 1;
-          if (sc3 || sc4)
-          {
-            drop_bytes = i;
-            break;
-          }
-        }
-        std::memmove(stream_buffer_.data(), stream_buffer_.data() + drop_bytes, stream_buffer_.size() - drop_bytes);
-        stream_buffer_.resize(stream_buffer_.size() - drop_bytes);
-        dropped_bytes_ += drop_bytes;
-        dropped_events_++;
-      }
+      //      if (stream_buffer_.size() > max_backlog_bytes)
+      //      {
+      //        size_t target_drop = stream_buffer_.size() - max_backlog_bytes;
+      //        size_t drop_bytes = target_drop;
+      //        for (size_t i = target_drop; i + 4 < stream_buffer_.size(); ++i)
+      //        {
+      //          bool sc3 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 1;
+      //          bool sc4 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 0 &&
+      //                     stream_buffer_[i + 3] == 1;
+      //          if (sc3 || sc4)
+      //          {
+      //            drop_bytes = i;
+      //            break;
+      //          }
+      //        }
+      //        std::memmove(stream_buffer_.data(), stream_buffer_.data() + drop_bytes, stream_buffer_.size() -
+      //        drop_bytes); stream_buffer_.resize(stream_buffer_.size() - drop_bytes); dropped_bytes_ += drop_bytes;
+      //        dropped_events_++;
+      //      }
 
       int64_t now_ns = ros::Time::now().toNSec();
       if (now_ns - last_telemetry_ns_ > 1000000000LL)

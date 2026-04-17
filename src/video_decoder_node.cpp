@@ -46,7 +46,7 @@ VideoDecoderNode::VideoDecoderNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   initDecoder();
   initMqtt();
   display_thread_ = std::thread(&VideoDecoderNode::decodeThread, this);
-    ROS_INFO("aaa");
+  ROS_INFO("aaa");
 }
 
 VideoDecoderNode::~VideoDecoderNode()
@@ -84,13 +84,47 @@ void VideoDecoderNode::onMqttMessage(const void* payload, int len)
   }
   // 反序列化后的数据
   const std::string& data = pb.data();
-  stream_buffer_.insert(stream_buffer_.end(),
-                        (const uint8_t*)data.data(),
+  if (data.empty())
+    return;
+  // pull current package 8-bit serial number
+  uint8_t current_seq = static_cast<uint8_t>(data[0]);
+  // serial number continuity check
+  if (last_seq_ != -1)
+  {
+    uint8_t expected_seq = static_cast<uint8_t>((last_seq_ + 1) & 0xFF);
+    if (current_seq != expected_seq)
+    {
+      ROS_WARN("Packet lost/recorded! Expected %d, got %d. Dropping corrupted buffer.", expected_seq, current_seq);
+
+      stream_buffer_.clear();
+      // FFmpeg throw trash and waiting next start code
+      if (parser_ctx_)
+      {
+        av_parser_close(parser_ctx_);
+        parser_ctx_ = av_parser_init(AV_CODEC_ID_H264);
+      }
+    }
+  }
+  last_seq_ = current_seq;
+  // 调试打印
+  printf("[MQTT 包] data_len: %-4lu | 第一个字节(seq): 0x%02X | 前8字节: ", data.size(), (uint8_t)data[0]);
+  for (int i = 0; i < std::min(8, (int)data.size()); i++)
+  {
+    printf("%02X ", (uint8_t)data[i]);
+  }
+  printf("\n");
+  stream_buffer_.insert(stream_buffer_.end(), (const uint8_t*)data.data() + 1,
                         (const uint8_t*)data.data() + data.size());
 
   AVPacket* pkt = av_packet_alloc();
   uint8_t* ptr = stream_buffer_.data();
   int remain = stream_buffer_.size();
+
+  if (data.size() > 1)
+  {
+    stream_buffer_.insert(stream_buffer_.end(), (const uint8_t*)data.data() + 1,
+                          (const uint8_t*)data.data() + data.size());
+  }
 
   while (remain > 0)
   {
@@ -105,8 +139,8 @@ void VideoDecoderNode::onMqttMessage(const void* payload, int len)
     {
       while (avcodec_receive_frame(codec_ctx_, frame_) == 0)
       {
-        sws_scale(sws_ctx_, frame_->data, frame_->linesize, 0, 400, rgb_frame_->data, rgb_frame_->linesize);
-        cv::Mat img(400, 400, CV_8UC3, rgb_frame_->data[0]);
+        sws_scale(sws_ctx_, frame_->data, frame_->linesize, 0, 320, rgb_frame_->data, rgb_frame_->linesize);
+        cv::Mat img(320, 320, CV_8UC3, rgb_frame_->data[0]);
         std::lock_guard<std::mutex> lk(mtx_);
         if (frame_queue_.size() > 2)
           frame_queue_.pop();
@@ -131,13 +165,13 @@ void VideoDecoderNode::initDecoder()
 
   frame_ = av_frame_alloc();
   rgb_frame_ = av_frame_alloc();
-  rgb_frame_->width = 400;
-  rgb_frame_->height = 400;
+  rgb_frame_->width = 320;
+  rgb_frame_->height = 320;
   rgb_frame_->format = AV_PIX_FMT_BGR24;
   av_frame_get_buffer(rgb_frame_, 0);
 
   sws_ctx_ =
-      sws_getContext(400, 400, AV_PIX_FMT_YUV420P, 400, 400, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+      sws_getContext(320, 320, AV_PIX_FMT_YUV420P, 320, 320, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
 }
 
 void VideoDecoderNode::freeDecoder()
