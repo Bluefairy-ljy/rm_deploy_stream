@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   sensor_msgs
   std_msgs
+  rm_msgs
   message_generation
 )
 
@@ -19,13 +20,9 @@ find_package(Protobuf REQUIRED)
 
 pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0)
 pkg_check_modules(FFMPEG REQUIRED libavcodec libavutil libavformat libswscale)
+pkg_check_modules(MOSQUITTO REQUIRED libmosquitto)
 
 PROTOBUF_GENERATE_CPP(PROTO_SRCS PROTO_HDRS proto/referee.proto)
-
-add_message_files(
-  FILES
-  VideoPacket.msg
-)
 
 generate_messages(
   DEPENDENCIES std_msgs
@@ -33,7 +30,7 @@ generate_messages(
 
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp cv_bridge sensor_msgs std_msgs message_runtime
+  CATKIN_DEPENDS roscpp cv_bridge sensor_msgs rm_msgs std_msgs message_runtime
 )
 
 include_directories(
@@ -44,6 +41,7 @@ include_directories(
   ${FFMPEG_INCLUDE_DIRS}
   ${CMAKE_CURRENT_BINARY_DIR}
   ${PROTOBUF_INCLUDE_DIR}
+  ${MOSQUITTO_INCLUDE_DIRS}
 )
 
 add_library(rm_deploy_stream_core
@@ -59,6 +57,7 @@ target_link_libraries(rm_deploy_stream_core
   ${GST_LIBRARIES}
   ${FFMPEG_LIBRARIES}
   ${PROTOBUF_LIBRARIES}
+  ${MOSQUITTO_LIBRARIES}
 )
 
 add_executable(video_encoder src/video_encoder_main.cpp)

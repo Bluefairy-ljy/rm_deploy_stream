@@ -17,11 +17,11 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
 {
   pnh_.param<std::string>("input_topic", input_topic_, "/hk_camera/image_raw");
   pnh_.param("crop_size", crop_size_, 800);
-  pnh_.param("output_size", output_size_, 400);
-  pnh_.param("output_fps", output_fps_, 60);
-  pnh_.param("target_bitrate", target_bitrate_, 110);
+  pnh_.param("output_size", output_size_, 320);
+  pnh_.param("output_fps", output_fps_, 30);
+  pnh_.param("target_bitrate", target_bitrate_, 90);
   pnh_.param("static_simplify", static_simplify_, true);
-  pnh_.param("motion_threshold", motion_threshold_, 14);
+  pnh_.param("motion_threshold", motion_threshold_, 7);
   pnh_.param("motion_erode_px", motion_erode_px_, 1);
   pnh_.param("motion_dilate_px", motion_dilate_px_, 2);
   pnh_.param("motion_trail_frames", motion_trail_frames_, 3);
@@ -30,7 +30,7 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
   pnh_.param("bg_blur_sigma", bg_blur_sigma_, 1.2);
   pnh_.param("center_clear_size", center_clear_size_, 100);
   pnh_.param("force_monochrome", force_monochrome_, false);
-  pnh_.param("bandwidth_limit_kbytes", bandwidth_limit_kbytes_, 14.0);
+  pnh_.param("bandwidth_limit_kbytes", bandwidth_limit_kbytes_, 12.0);
   pnh_.param("bandwidth_window_s", bandwidth_window_s_, 2.0);
   pnh_.param("max_tx_delay_s", max_tx_delay_s_, 1.0);
   pnh_.param("enable_display", enable_display_, true);
@@ -64,7 +64,7 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
     }
   }
 
-  packet_pub_ = nh_.advertise<rm_deploy_stream::VideoPacket>("/video_stream", 3000);
+  packet_pub_ = nh_.advertise<rm_msgs::VideoPacket>("/video_stream", 3000);
   image_sub_ = it_.subscribe(input_topic_, 10, &VideoEncoderCore::imageCallback, this);
 
   initializeGstreamer();
@@ -392,7 +392,7 @@ void VideoEncoderCore::pullStreamAndPacketize()
           break;
 
         // 构造并发送包
-        rm_deploy_stream::VideoPacket pkt;
+        rm_msgs::VideoPacket pkt;
         pkt.data.fill(0);
         // 第一个字节放序列号
         pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);

@@ -15,8 +15,7 @@
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
-
-#include "rm_deploy_stream/VideoPacket.h"
+#include <rm_msgs/VideoPacket.h>
 
 namespace rm_deploy_stream
 {
@@ -80,9 +79,9 @@ private:
 
   std::string input_topic_;
   int crop_size_{ 800 };
-  int output_size_{ 400 };
-  int output_fps_{ 60 };
-  int target_bitrate_{ 110 };
+  int output_size_{ 320 };
+  int output_fps_{ 30 };
+  int target_bitrate_{ 90 };
   bool static_simplify_{ true };
   int motion_threshold_{ 14 };
   int motion_erode_px_{ 1 };
@@ -93,7 +92,7 @@ private:
   double bg_blur_sigma_{ 1.2 };
   int center_clear_size_{ 100 };
   bool force_monochrome_{ false };
-  double bandwidth_limit_kbytes_{ 14.0 };
+  double bandwidth_limit_kbytes_{ 12.0 };
   double bandwidth_window_s_{ 2.0 };
   double max_tx_delay_s_{ 1.0 };
   bool enable_display_{ false };

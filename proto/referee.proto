@@ -1,0 +1,6 @@
+syntax = "proto3";
+package referee;
+message CustomByteBlock
+{
+  bytes data = 1;
+}
