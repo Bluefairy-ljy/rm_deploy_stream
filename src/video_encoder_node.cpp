@@ -118,7 +118,7 @@ void VideoEncoderCore::initializeGstreamer()
   gst_caps_unref(caps);
 
   const bool low_bitrate_mode = (target_bitrate_ <= 80);
-  const int key_int = std::max(8 * output_fps_, 30);
+  const int key_int = std::max(2 *output_fps_, 30);
 
   g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int,
                "repeat-headers", TRUE, nullptr);

@@ -40,12 +40,12 @@ private:
   // FFmpeg 相关
   AVCodecContext* codec_ctx_;
   AVCodecParserContext* parser_ctx_;
-  AVFrame* frame_;      // YUV帧
-  AVFrame* rgb_frame_;  // RGB/BGR帧
+  AVFrame* yuv_frame_;
+  AVFrame* rgb_frame_;
   SwsContext* sws_ctx_;
 
   // MQTT 客户端
-  mosquitto* mosq_;
+  mosquitto* mqtt_client_;
 
   // 数据流缓冲
   std::vector<uint8_t> stream_buffer_;
@@ -54,7 +54,7 @@ private:
   std::atomic<bool> display_running_;
   std::thread display_thread_;
 
-  // 帧队列 + 互斥锁
+  // 帧队列
   std::queue<cv::Mat> frame_queue_;
   std::mutex mtx_;
   int last_seq_;
