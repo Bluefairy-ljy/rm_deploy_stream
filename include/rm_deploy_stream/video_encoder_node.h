@@ -79,7 +79,7 @@ private:
 
   std::string input_topic_;
   int crop_size_{ 800 };
-  int output_size_{ 320 };
+  int output_size_{ 240 };
   int output_fps_{ 30 };
   int target_bitrate_{ 90 };
   bool static_simplify_{ true };

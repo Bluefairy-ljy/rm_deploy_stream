@@ -27,6 +27,7 @@ public:
   VideoDecoderNode(ros::NodeHandle& nh, ros::NodeHandle& pnh);
   ~VideoDecoderNode();
   void onMqttMessage(const void* payload, int len);
+  void processPacket(const std::vector<uint8_t>& data);
 
 private:
   // 初始化函数
@@ -54,10 +55,13 @@ private:
   std::atomic<bool> display_running_;
   std::thread display_thread_;
 
-  // 帧队列
+  // 队列
   std::queue<cv::Mat> frame_queue_;
-  std::mutex mtx_;
+  std::mutex frame_mtx_;
+  std::queue<std::vector<uint8_t>> packet_queue_;
+  std::mutex queue_mutex_;
   int last_seq_;
+  bool waiting_for_idr_;
 };
 
 }  // namespace rm_deploy_stream

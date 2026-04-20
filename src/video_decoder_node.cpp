@@ -25,11 +25,11 @@ static void mqtt_connect_callback(struct mosquitto* mosq, void* userdata, int re
   if (result == 0)
   {
     mosquitto_subscribe(mosq, nullptr, MQTT_TOPIC, 1);
-    printf("MQTT is ok，listen: %s\n", MQTT_TOPIC);
+    ROS_INFO("mqtt is ok");
   }
   else
   {
-    printf("MQTT manbaout");
+    ROS_INFO("mqtt manbaout");
   }
 }
 
@@ -42,11 +42,11 @@ VideoDecoderNode::VideoDecoderNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   , mqtt_client_(nullptr)
   , last_seq_(-1)
   , display_running_(true)
+  , waiting_for_idr_(true)
 {
   initDecoder();
   initMqtt();
   display_thread_ = std::thread(&VideoDecoderNode::decodeThread, this);
-  ROS_INFO("aaa");
 }
 
 VideoDecoderNode::~VideoDecoderNode()
@@ -60,12 +60,11 @@ VideoDecoderNode::~VideoDecoderNode()
   freeDecoder();
 }
 
-// 初始化 MQTT
 void VideoDecoderNode::initMqtt()
 {
   ROS_INFO("Init mqtt");
   mosquitto_lib_init();
-    mqtt_client_ = mosquitto_new(MQTT_CLIENT_ID, true, this);
+  mqtt_client_ = mosquitto_new(MQTT_CLIENT_ID, true, this);
 
   mosquitto_connect_callback_set(mqtt_client_, mqtt_connect_callback);
   mosquitto_message_callback_set(mqtt_client_, mqtt_message_callback);
@@ -73,46 +72,117 @@ void VideoDecoderNode::initMqtt()
   mosquitto_connect_async(mqtt_client_, MQTT_HOST, MQTT_PORT, 60);
   mosquitto_loop_start(mqtt_client_);
 }
+
+void VideoDecoderNode::initDecoder()
+{
+  ROS_INFO("Init decoder");
+  const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+  parser_ctx_ = av_parser_init(AV_CODEC_ID_H264);
+  codec_ctx_ = avcodec_alloc_context3(codec);
+  codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+  codec_ctx_->thread_count = 1;
+  avcodec_open2(codec_ctx_, codec, nullptr);
+
+  yuv_frame_ = av_frame_alloc();
+  rgb_frame_ = av_frame_alloc();
+  rgb_frame_->width = 240;
+  rgb_frame_->height = 240;
+  rgb_frame_->format = AV_PIX_FMT_BGR24;
+  av_frame_get_buffer(rgb_frame_, 0);
+
+  sws_ctx_ =
+      sws_getContext(240, 240, AV_PIX_FMT_YUV420P, 240, 240, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+}
+
+void VideoDecoderNode::freeDecoder()
+{
+  sws_freeContext(sws_ctx_);
+  av_frame_free(&yuv_frame_);
+  av_frame_free(&rgb_frame_);
+  avcodec_free_context(&codec_ctx_);
+  av_parser_close(parser_ctx_);
+}
+
+void VideoDecoderNode::decodeThread()
+{
+  cv::namedWindow("Video", cv::WINDOW_NORMAL);
+  cv::startWindowThread();
+  cv::Mat black(240, 240, CV_8UC3, cv::Scalar(0, 0, 0));
+  while (display_running_ && ros::ok())
+  {
+    std::vector<uint8_t> pkt_data;
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      if (!packet_queue_.empty())
+      {
+        pkt_data = std::move(packet_queue_.front());
+        packet_queue_.pop();
+      }
+    }
+    if (!pkt_data.empty())
+    {
+      processPacket(pkt_data);
+    }
+    cv::Mat img;
+    {
+      std::lock_guard<std::mutex> lock(frame_mtx_);
+      if (!frame_queue_.empty())
+      {
+        img = frame_queue_.front();
+        frame_queue_.pop();
+      }
+    }
+    if (!img.empty())
+    {
+      cv::imshow("Video", img);
+    }
+    else
+    {
+      cv::imshow("Video", black);
+    }
+    cv::waitKey(1);
+    if (pkt_data.empty() && img.empty())
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+}
+
 void VideoDecoderNode::onMqttMessage(const void* payload, int len)
 {
   referee::CustomByteBlock proto_msg;
-  // 把 MQTT 收到的二进制数据还原成可用的 H264 视频流
   if (!proto_msg.ParseFromArray(payload, len))
-  {
-    printf("Protobuf manbaout");
     return;
-  }
-  // 反序列化后的数据
   const std::string& data = proto_msg.data();
   if (data.empty())
     return;
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    packet_queue_.emplace(data.begin(), data.end());
+  }
+}
+
+void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
+{
   // 每个包第一个字节是包序号
   auto current_seq = static_cast<uint8_t>(data[0]);
   if (last_seq_ != -1)
   {
     auto expected_seq = static_cast<uint8_t>((last_seq_ + 1) & 0xFF);
-      // 丢包乱序时
-      if (current_seq != expected_seq)
+    // 丢包乱序时
+    if (current_seq != expected_seq)
     {
       ROS_WARN("Packet lost/recorded! Expected %d, got %d. Dropping corrupted buffer.", expected_seq, current_seq);
+      // 清理编码器内部状态
+      avcodec_flush_buffers(codec_ctx_);
       // 清空损坏的视频数据
       stream_buffer_.clear();
       // 重置解码器，等待下一个关键帧重新开始
-      if (parser_ctx_)
-      {
-        av_parser_close(parser_ctx_);
-        parser_ctx_ = av_parser_init(AV_CODEC_ID_H264);
-      }
+      waiting_for_idr_ = true;
     }
   }
   last_seq_ = current_seq;
-  // 调试打印
-  printf("[MQTT 包] data_len: %-4lu | 第一个字节(seq): 0x%02X | 前8字节: ", data.size(), (uint8_t)data[0]);
-  for (int i = 0; i < std::min(8, (int)data.size()); i++)
-  {
-    printf("%02X ", (uint8_t)data[i]);
-  }
-  printf("\n");
+  ROS_INFO("MQTT packet: seq=%u, len=%lu", current_seq, data.size());
   // 把 H.264 数据写入缓冲区，第2到300字节
   if (data.size() > 1)
   {
@@ -128,88 +198,56 @@ void VideoDecoderNode::onMqttMessage(const void* payload, int len)
   while (remaining_bytes > 0)
   {
     // FFmpeg 解析 H.264 流，把拼接好的 H264 流切成完整的帧。parse_result 为消耗的字节数
-    int parse_result = av_parser_parse2(parser_ctx_, codec_ctx_, &pkt->data, &pkt->size, buffer_pos, remaining_bytes, 0, 0, 0);
+    int parse_result =
+        av_parser_parse2(parser_ctx_, codec_ctx_, &pkt->data, &pkt->size, buffer_pos, remaining_bytes, 0, 0, 0);
     if (parse_result <= 0)
       break;
     buffer_pos += parse_result;
     remaining_bytes -= parse_result;
-    // 把一帧完整的 H.264 交给解码器
-    if (pkt->size && avcodec_send_packet(codec_ctx_, pkt) == 0)
+    if (pkt->size > 0)
     {
-      // 接收解码后的图像
-      while (avcodec_receive_frame(codec_ctx_, yuv_frame_) == 0)
+      int nal_type = pkt->data[0] & 0x1F;
+      bool is_key_nal = (nal_type == 5 || nal_type == 7 || nal_type == 8);  // IDR, SPS, PPS
+      if (waiting_for_idr_ && !is_key_nal)
       {
-        // 格式转换从YUV到BGR
-        sws_scale(sws_ctx_, yuv_frame_->data, yuv_frame_->linesize, 0, 320, rgb_frame_->data, rgb_frame_->linesize);
-        cv::Mat img(320, 320, CV_8UC3, rgb_frame_->data[0]);
-        std::lock_guard<std::mutex> lock(mtx_);
-        if (frame_queue_.size() > 2)
-          frame_queue_.pop();
-        // 图像送入队列
-        frame_queue_.push(img.clone());
+        av_packet_unref(pkt);
+        continue;
+      }
+      if (nal_type == 5)
+      {  // 只有收到 IDR 才清除等待标志
+        waiting_for_idr_ = false;
+        ROS_INFO("Received IDR, resuming decoding.");
+      }
+      // 把一帧完整的 H.264 交给解码器
+      if (avcodec_send_packet(codec_ctx_, pkt) == 0)
+      {
+        // 接收解码后的图像
+        while (avcodec_receive_frame(codec_ctx_, yuv_frame_) == 0)
+        {
+          ROS_INFO("Frame decoded， queue size: %zu", frame_queue_.size());
+          // 格式转换从YUV到BGR
+          sws_scale(sws_ctx_, yuv_frame_->data, yuv_frame_->linesize, 0, 240, rgb_frame_->data, rgb_frame_->linesize);
+          cv::Mat img(240, 240, CV_8UC3, rgb_frame_->data[0]);
+          std::lock_guard<std::mutex> lock(frame_mtx_);
+          if (frame_queue_.size() > 5)
+            frame_queue_.pop();
+          // 图像送入队列
+          frame_queue_.push(img.clone());
+        }
       }
     }
+    av_packet_unref(pkt);
   }
-  // 留下未解析数据，清掉解析过的
-  stream_buffer_.assign(buffer_pos, buffer_pos + remaining_bytes);
-  av_packet_free(&pkt);
-}
-
-void VideoDecoderNode::initDecoder()
-{
-  ROS_INFO("Init decoder");
-  const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-  parser_ctx_ = av_parser_init(AV_CODEC_ID_H264);
-  codec_ctx_ = avcodec_alloc_context3(codec);
-  codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
-  codec_ctx_->thread_count = 1;
-  avcodec_open2(codec_ctx_, codec, nullptr);
-
-    yuv_frame_ = av_frame_alloc();
-  rgb_frame_ = av_frame_alloc();
-  rgb_frame_->width = 320;
-  rgb_frame_->height = 320;
-  rgb_frame_->format = AV_PIX_FMT_BGR24;
-  av_frame_get_buffer(rgb_frame_, 0);
-
-  sws_ctx_ =
-      sws_getContext(320, 320, AV_PIX_FMT_YUV420P, 320, 320, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
-}
-
-void VideoDecoderNode::freeDecoder()
-{
-  sws_freeContext(sws_ctx_);
-  av_frame_free(&yuv_frame_);
-  av_frame_free(&rgb_frame_);
-  avcodec_free_context(&codec_ctx_);
-  av_parser_close(parser_ctx_);
-}
-
-void VideoDecoderNode::decodeThread()
-{
-  cv::namedWindow("Video", cv::WINDOW_NORMAL);
-  while (display_running_ && ros::ok())
+  if (buffer_pos != stream_buffer_.data())
   {
-    cv::Mat img;
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      if (!frame_queue_.empty())
-      {
-        img = frame_queue_.front();
-        frame_queue_.pop();
-      }
-    }
-    if (!img.empty())
-    {
-      cv::imshow("Video", img);
-      cv::waitKey(1);
-    }
-    else
-    {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
+    stream_buffer_.assign(buffer_pos, buffer_pos + remaining_bytes);
   }
-  cv::destroyAllWindows();
+  static FILE* f = fopen("/tmp/recv.h264", "ab");
+  if (f && stream_buffer_.size() > 0)
+  {
+    fwrite(stream_buffer_.data(), 1, stream_buffer_.size(), f);
+    fflush(f);
+    av_packet_free(&pkt);
+  }
 }
-
 }  // namespace rm_deploy_stream

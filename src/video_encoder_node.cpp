@@ -17,10 +17,10 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
 {
   pnh_.param<std::string>("input_topic", input_topic_, "/hk_camera/image_raw");
   pnh_.param("crop_size", crop_size_, 800);
-  pnh_.param("output_size", output_size_, 320);
+  pnh_.param("output_size", output_size_, 240);
   pnh_.param("output_fps", output_fps_, 30);
   pnh_.param("target_bitrate", target_bitrate_, 90);
-  pnh_.param("static_simplify", static_simplify_, true);
+  pnh_.param("static_simplify", static_simplify_, false);
   pnh_.param("motion_threshold", motion_threshold_, 7);
   pnh_.param("motion_erode_px", motion_erode_px_, 1);
   pnh_.param("motion_dilate_px", motion_dilate_px_, 2);
@@ -118,7 +118,7 @@ void VideoEncoderCore::initializeGstreamer()
   gst_caps_unref(caps);
 
   const bool low_bitrate_mode = (target_bitrate_ <= 80);
-  const int key_int = std::max(2 *output_fps_, 30);
+  const int key_int = output_fps_;
 
   g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int,
                "repeat-headers", TRUE, nullptr);
