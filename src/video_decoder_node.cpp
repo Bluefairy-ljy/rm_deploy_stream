@@ -242,12 +242,5 @@ void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
   {
     stream_buffer_.assign(buffer_pos, buffer_pos + remaining_bytes);
   }
-  static FILE* f = fopen("/tmp/recv.h264", "ab");
-  if (f && stream_buffer_.size() > 0)
-  {
-    fwrite(stream_buffer_.data(), 1, stream_buffer_.size(), f);
-    fflush(f);
-    av_packet_free(&pkt);
-  }
 }
 }  // namespace rm_deploy_stream
