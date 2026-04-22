@@ -17,7 +17,7 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
 {
   pnh_.param<std::string>("input_topic", input_topic_, "/hk_camera/image_raw");
   pnh_.param("crop_size", crop_size_, 800);
-  pnh_.param("output_size", output_size_, 240);
+  pnh_.param("output_size", output_size_, 320);
   pnh_.param("output_fps", output_fps_, 30);
   pnh_.param("target_bitrate", target_bitrate_, 90);
   pnh_.param("static_simplify", static_simplify_, false);
@@ -30,10 +30,7 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
   pnh_.param("bg_blur_sigma", bg_blur_sigma_, 1.2);
   pnh_.param("center_clear_size", center_clear_size_, 100);
   pnh_.param("force_monochrome", force_monochrome_, false);
-  pnh_.param("bandwidth_limit_kbytes", bandwidth_limit_kbytes_, 12.0);
-  pnh_.param("bandwidth_window_s", bandwidth_window_s_, 2.0);
-  pnh_.param("max_tx_delay_s", max_tx_delay_s_, 1.0);
-  pnh_.param("enable_display", enable_display_, true);
+  pnh_.param("enable_display", enable_display_, false);
   pnh_.param<std::string>("x264_preset", x264_preset_, "auto");
   pnh_.param("debug_dump_enable", debug_dump_enable_, false);
   pnh_.param("debug_dump_every_n_frames", debug_dump_every_n_frames_, 20);
@@ -48,9 +45,6 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
   motion_erode_px_ = std::clamp(motion_erode_px_, 0, 20);
   motion_dilate_px_ = std::clamp(motion_dilate_px_, 0, 20);
   trail_disable_motion_ratio_ = std::clamp(trail_disable_motion_ratio_, 0.0, 1.0);
-  bandwidth_limit_kbytes_ = std::max(1.0, bandwidth_limit_kbytes_);
-  bandwidth_window_s_ = std::max(0.2, bandwidth_window_s_);
-  max_tx_delay_s_ = std::max(0.05, max_tx_delay_s_);
   debug_dump_every_n_frames_ = std::max(1, debug_dump_every_n_frames_);
 
   if (debug_dump_enable_)
@@ -74,7 +68,7 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
     display_running_ = true;
     display_thread_ = std::thread(&VideoEncoderCore::displayLoop, this);
   }
-
+  //send_timer_ = nh_.createTimer(ros::Duration(0.02), &VideoEncoderCore::sendOnePacket, this);
   ROS_INFO("video_encoder ready. sub=%s out=%dx%d@%dfps bitrate=%dkbps", input_topic_.c_str(), output_size_,
            output_size_, output_fps_, target_bitrate_);
 }
@@ -103,7 +97,6 @@ void VideoEncoderCore::initializeGstreamer()
   GstElement* convert = gst_element_factory_make("videoconvert", "convert");
   GstElement* encoder = gst_element_factory_make("x264enc", "encoder");
   GstElement* parser = gst_element_factory_make("h264parse", "parser");
-
   if (!pipeline_ || !appsrc_ || !appsink_ || !convert || !encoder || !parser)
   {
     ROS_FATAL("GStreamer element creation failed");
@@ -113,33 +106,18 @@ void VideoEncoderCore::initializeGstreamer()
   GstCaps* caps =
       gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "BGR", "width", G_TYPE_INT, output_size_, "height",
                           G_TYPE_INT, output_size_, "framerate", GST_TYPE_FRACTION, output_fps_, 1, nullptr);
-  g_object_set(G_OBJECT(appsrc_), "caps", caps, "stream-type", 0, "format", GST_FORMAT_TIME, "is-live", TRUE,
-               "do-timestamp", TRUE, nullptr);
+  g_object_set(G_OBJECT(appsrc_), "caps", caps, "stream-type", GST_APP_STREAM_TYPE_STREAM, "format", GST_FORMAT_TIME,
+               "is-live", TRUE, "do-timestamp", TRUE, nullptr);
   gst_caps_unref(caps);
 
-  const bool low_bitrate_mode = (target_bitrate_ <= 80);
-  const int key_int = output_fps_;
-
-  g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int,
-               "repeat-headers", TRUE, nullptr);
-
-  if (low_bitrate_mode)
-  {
-    g_object_set(G_OBJECT(encoder), "speed-preset", 9, "bframes", 4, "rc-lookahead", 40, "ref", 5, "option-string",
-                 "repeat-headers=1:scenecut=0:aq-mode=2:mbtree=1:force-cfr=1", nullptr);
-  }
-  else
-  {
-    g_object_set(G_OBJECT(encoder), "speed-preset", 3, "tune", 0x00000004, "bframes", 0, "rc-lookahead", 0,
-                 "option-string", "repeat-headers=1:scenecut=0:ref=1:force-cfr=1", nullptr);
-  }
-
-  g_object_set(G_OBJECT(parser), "config-interval", -1, "disable-passthrough", TRUE, nullptr);
-
+  const int key_int = std::max(1, output_fps_ / 5);
+  g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int, "bframes", 0,
+               "rc-lookahead", 0, "speed-preset", 6, nullptr);
   GstCaps* h264_caps = gst_caps_new_simple("video/x-h264", "stream-format", G_TYPE_STRING, "byte-stream", "alignment",
                                            G_TYPE_STRING, "au", nullptr);
   g_object_set(G_OBJECT(appsink_), "caps", h264_caps, "max-buffers", 5, "drop", FALSE, "emit-signals", FALSE, "sync",
                FALSE, nullptr);
+  g_object_set(G_OBJECT(parser), "config-interval", -1, "disable-passthrough", TRUE, nullptr);
   gst_caps_unref(h264_caps);
 
   gst_bin_add_many(GST_BIN(pipeline_), appsrc_, convert, encoder, parser, appsink_, nullptr);
@@ -346,7 +324,51 @@ void VideoEncoderCore::pushFrameToGstreamer(const cv::Mat& frame)
   }
   gst_buffer_unref(buffer);
 }
-
+// void VideoEncoderCore::pullStreamData()
+//{
+//  if (!appsink_)
+//    return;
+//  while (true)
+//  {
+//    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
+//    if (!sample)
+//      break;
+//    GstBuffer* buffer = gst_sample_get_buffer(sample);
+//    if (!buffer)
+//    {
+//      gst_sample_unref(sample);
+//      continue;
+//    }
+//    GstMapInfo map;
+//    if (gst_buffer_map(buffer, &map, GST_MAP_READ))
+//    {
+//      std::lock_guard<std::mutex> lk(buffer_mutex_);
+//
+//      size_t old = stream_buffer_.size();
+//      stream_buffer_.resize(old + map.size);
+//      std::memcpy(stream_buffer_.data() + old, map.data, map.size);
+//      gst_buffer_unmap(buffer, &map);
+//    }
+//    gst_sample_unref(sample);
+//  }
+//}
+// void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
+//{
+//  std::lock_guard<std::mutex> lk(buffer_mutex_);
+//  // 如果缓冲区中不足一个完整包，则返回
+//  if (stream_buffer_.size() < kVideoSize)
+//    return;
+//  // 构造一个视频包
+//  rm_msgs::VideoPacket pkt;
+//  pkt.data.fill(0);
+//  pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);
+//  packet_sequence_id_++;
+//  std::memcpy(pkt.data.data() + kSeqSize, stream_buffer_.data(), kVideoSize);
+//  packet_pub_.publish(pkt);
+//  // 从缓冲区中移除已发送的数据
+//  std::memmove(stream_buffer_.data(), stream_buffer_.data() + kVideoSize, stream_buffer_.size() - kVideoSize);
+//  stream_buffer_.resize(stream_buffer_.size() - kVideoSize);
+//}
 void VideoEncoderCore::pullStreamAndPacketize()
 {
   if (!appsink_)

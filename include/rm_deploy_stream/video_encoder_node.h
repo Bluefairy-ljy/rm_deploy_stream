@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <ros/ros.h>
+#include <ros/timer.h>
 #include <image_transport/image_transport.h>
 #include <sensor_msgs/Image.h>
 #include <opencv2/opencv.hpp>
@@ -31,6 +32,8 @@ private:
   void initializeGstreamer();
   void shutdownGstreamer();
   void pushFrameToGstreamer(const cv::Mat& frame);
+//  void pullStreamData();
+//  void sendOnePacket(const ros::TimerEvent&);
   void pullStreamAndPacketize();
   void displayLoop();
 
@@ -44,7 +47,7 @@ private:
   image_transport::ImageTransport it_;
   image_transport::Subscriber image_sub_;
   ros::Publisher packet_pub_;
-
+  ros::Timer send_timer_;
   GstElement* pipeline_{ nullptr };
   GstElement* appsrc_{ nullptr };
   GstElement* appsink_{ nullptr };
@@ -79,7 +82,7 @@ private:
 
   std::string input_topic_;
   int crop_size_{ 800 };
-  int output_size_{ 240 };
+  int output_size_{ 320 };
   int output_fps_{ 30 };
   int target_bitrate_{ 90 };
   bool static_simplify_{ true };

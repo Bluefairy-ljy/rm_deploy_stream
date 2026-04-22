@@ -10,7 +10,7 @@ namespace rm_deploy_stream
 #define MQTT_HOST "192.168.1.2"
 #define MQTT_PORT 3333
 #define MQTT_TOPIC "CustomByteBlock"
-#define MQTT_CLIENT_ID "101"
+#define MQTT_CLIENT_ID "1"
 
 static void mqtt_message_callback(struct mosquitto* mosq, void* userdata, const struct mosquitto_message* msg)
 {
@@ -47,6 +47,7 @@ VideoDecoderNode::VideoDecoderNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
   initDecoder();
   initMqtt();
   display_thread_ = std::thread(&VideoDecoderNode::decodeThread, this);
+  ROS_INFO("aaa");
 }
 
 VideoDecoderNode::~VideoDecoderNode()
@@ -85,13 +86,13 @@ void VideoDecoderNode::initDecoder()
 
   yuv_frame_ = av_frame_alloc();
   rgb_frame_ = av_frame_alloc();
-  rgb_frame_->width = 240;
-  rgb_frame_->height = 240;
+  rgb_frame_->width = 320;
+  rgb_frame_->height = 320;
   rgb_frame_->format = AV_PIX_FMT_BGR24;
   av_frame_get_buffer(rgb_frame_, 0);
 
   sws_ctx_ =
-      sws_getContext(240, 240, AV_PIX_FMT_YUV420P, 240, 240, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
+      sws_getContext(320, 320, AV_PIX_FMT_YUV420P, 320, 320, AV_PIX_FMT_BGR24, SWS_BILINEAR, nullptr, nullptr, nullptr);
 }
 
 void VideoDecoderNode::freeDecoder()
@@ -107,7 +108,6 @@ void VideoDecoderNode::decodeThread()
 {
   cv::namedWindow("Video", cv::WINDOW_NORMAL);
   cv::startWindowThread();
-  cv::Mat black(240, 240, CV_8UC3, cv::Scalar(0, 0, 0));
   while (display_running_ && ros::ok())
   {
     std::vector<uint8_t> pkt_data;
@@ -135,10 +135,6 @@ void VideoDecoderNode::decodeThread()
     if (!img.empty())
     {
       cv::imshow("Video", img);
-    }
-    else
-    {
-      cv::imshow("Video", black);
     }
     cv::waitKey(1);
     if (pkt_data.empty() && img.empty())
@@ -177,6 +173,11 @@ void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
       avcodec_flush_buffers(codec_ctx_);
       // 清空损坏的视频数据
       stream_buffer_.clear();
+      if (parser_ctx_)
+      {
+        av_parser_close(parser_ctx_);
+        parser_ctx_ = av_parser_init(AV_CODEC_ID_H264);
+      }
       // 重置解码器，等待下一个关键帧重新开始
       waiting_for_idr_ = true;
     }
@@ -188,6 +189,18 @@ void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
   {
     stream_buffer_.insert(stream_buffer_.end(), (const uint8_t*)data.data() + 1,
                           (const uint8_t*)data.data() + data.size());
+  }
+  if (waiting_for_idr_)
+  {
+    if (!is_complete_idr_access_unit(stream_buffer_.data(), stream_buffer_.size()))
+    {
+      return;
+    }
+    else
+    {
+      waiting_for_idr_ = false;
+      ROS_INFO("Complete IDR access unit received, resuming decoding.");
+    }
   }
   // 分配一个 AVPacket 用于存放切分出来的 H.264 帧
   AVPacket* pkt = av_packet_alloc();
@@ -206,18 +219,6 @@ void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
     remaining_bytes -= parse_result;
     if (pkt->size > 0)
     {
-      int nal_type = pkt->data[0] & 0x1F;
-      bool is_key_nal = (nal_type == 5 || nal_type == 7 || nal_type == 8);  // IDR, SPS, PPS
-      if (waiting_for_idr_ && !is_key_nal)
-      {
-        av_packet_unref(pkt);
-        continue;
-      }
-      if (nal_type == 5)
-      {  // 只有收到 IDR 才清除等待标志
-        waiting_for_idr_ = false;
-        ROS_INFO("Received IDR, resuming decoding.");
-      }
       // 把一帧完整的 H.264 交给解码器
       if (avcodec_send_packet(codec_ctx_, pkt) == 0)
       {
@@ -226,8 +227,8 @@ void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
         {
           ROS_INFO("Frame decoded， queue size: %zu", frame_queue_.size());
           // 格式转换从YUV到BGR
-          sws_scale(sws_ctx_, yuv_frame_->data, yuv_frame_->linesize, 0, 240, rgb_frame_->data, rgb_frame_->linesize);
-          cv::Mat img(240, 240, CV_8UC3, rgb_frame_->data[0]);
+          sws_scale(sws_ctx_, yuv_frame_->data, yuv_frame_->linesize, 0, 320, rgb_frame_->data, rgb_frame_->linesize);
+          cv::Mat img(320, 320, CV_8UC3, rgb_frame_->data[0]);
           std::lock_guard<std::mutex> lock(frame_mtx_);
           if (frame_queue_.size() > 5)
             frame_queue_.pop();
@@ -242,5 +243,46 @@ void VideoDecoderNode::processPacket(const std::vector<uint8_t>& data)
   {
     stream_buffer_.assign(buffer_pos, buffer_pos + remaining_bytes);
   }
+  av_packet_free(&pkt);
+}
+bool VideoDecoderNode::is_complete_idr_access_unit(const uint8_t* data, size_t len)
+{
+  bool has_sps = false, has_pps = false, has_idr = false;
+  size_t i = 0;
+  while (i < len)
+  {
+    // 3字节起始码 0x00 0x00 0x01
+    if (i + 3 < len && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1)
+    {
+      // 取 NAL 头的低5位
+      int nal_type = data[i + 3] & 0x1F;
+      if (nal_type == 7)
+        has_sps = true;
+      else if (nal_type == 8)
+        has_pps = true;
+      else if (nal_type == 5)
+        has_idr = true;
+      // 跳过起始码，继续扫描
+      i += 3;
+    }
+    // 4字节起始码 0x00 0x00 0x00 0x01
+    else if (i + 4 < len && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1)
+    {
+      int nal_type = data[i + 4] & 0x1F;
+      if (nal_type == 7)
+        has_sps = true;
+      else if (nal_type == 8)
+        has_pps = true;
+      else if (nal_type == 5)
+        has_idr = true;
+      i += 4;
+    }
+    else
+    {
+      // 不是起始码，一个字节一个字节地往后走
+      i++;
+    }
+  }
+  return has_sps && has_pps && has_idr;
 }
 }  // namespace rm_deploy_stream

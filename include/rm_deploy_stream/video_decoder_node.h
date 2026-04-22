@@ -28,6 +28,7 @@ public:
   ~VideoDecoderNode();
   void onMqttMessage(const void* payload, int len);
   void processPacket(const std::vector<uint8_t>& data);
+  bool is_complete_idr_access_unit(const uint8_t* data, size_t len);
 
 private:
   // 初始化函数
