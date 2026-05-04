@@ -20,11 +20,11 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
   pnh_.param("output_size", output_size_, 320);
   pnh_.param("output_fps", output_fps_, 30);
   pnh_.param("target_bitrate", target_bitrate_, 90);
-  pnh_.param("static_simplify", static_simplify_, false);
+  pnh_.param("static_simplify", static_simplify_, true);
   pnh_.param("motion_threshold", motion_threshold_, 7);
   pnh_.param("motion_erode_px", motion_erode_px_, 1);
   pnh_.param("motion_dilate_px", motion_dilate_px_, 2);
-  pnh_.param("motion_trail_frames", motion_trail_frames_, 3);
+  pnh_.param("motion_trail_frames", motion_trail_frames_, 1);
   pnh_.param("trail_disable_motion_ratio", trail_disable_motion_ratio_, 0.30);
   pnh_.param("bg_update_alpha", bg_update_alpha_, 0.01);
   pnh_.param("bg_blur_sigma", bg_blur_sigma_, 1.2);
@@ -68,7 +68,7 @@ VideoEncoderCore::VideoEncoderCore(const ros::NodeHandle& nh, const ros::NodeHan
     display_running_ = true;
     display_thread_ = std::thread(&VideoEncoderCore::displayLoop, this);
   }
-  //send_timer_ = nh_.createTimer(ros::Duration(0.02), &VideoEncoderCore::sendOnePacket, this);
+  send_timer_ = nh_.createTimer(ros::Duration(0.021), &VideoEncoderCore::sendOnePacket, this);
   ROS_INFO("video_encoder ready. sub=%s out=%dx%d@%dfps bitrate=%dkbps", input_topic_.c_str(), output_size_,
            output_size_, output_fps_, target_bitrate_);
 }
@@ -110,7 +110,7 @@ void VideoEncoderCore::initializeGstreamer()
                "is-live", TRUE, "do-timestamp", TRUE, nullptr);
   gst_caps_unref(caps);
 
-  const int key_int = std::max(1, output_fps_ / 5);
+  const int key_int = std::max(1, output_fps_);
   g_object_set(G_OBJECT(encoder), "bitrate", target_bitrate_, "byte-stream", TRUE, "key-int-max", key_int, "bframes", 0,
                "rc-lookahead", 0, "speed-preset", 6, nullptr);
   GstCaps* h264_caps = gst_caps_new_simple("video/x-h264", "stream-format", G_TYPE_STRING, "byte-stream", "alignment",
@@ -296,7 +296,8 @@ void VideoEncoderCore::imageCallback(const sensor_msgs::ImageConstPtr& msg)
     }
 
     pushFrameToGstreamer(processed);
-    pullStreamAndPacketize();
+    // pullStreamAndPacketize();
+    pullStreamData();
     frame_count_++;
   }
   catch (const cv_bridge::Exception& e)
@@ -324,151 +325,209 @@ void VideoEncoderCore::pushFrameToGstreamer(const cv::Mat& frame)
   }
   gst_buffer_unref(buffer);
 }
-// void VideoEncoderCore::pullStreamData()
-//{
-//  if (!appsink_)
-//    return;
-//  while (true)
-//  {
-//    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
-//    if (!sample)
-//      break;
-//    GstBuffer* buffer = gst_sample_get_buffer(sample);
-//    if (!buffer)
-//    {
-//      gst_sample_unref(sample);
-//      continue;
-//    }
-//    GstMapInfo map;
-//    if (gst_buffer_map(buffer, &map, GST_MAP_READ))
-//    {
-//      std::lock_guard<std::mutex> lk(buffer_mutex_);
-//
-//      size_t old = stream_buffer_.size();
-//      stream_buffer_.resize(old + map.size);
-//      std::memcpy(stream_buffer_.data() + old, map.data, map.size);
-//      gst_buffer_unmap(buffer, &map);
-//    }
-//    gst_sample_unref(sample);
-//  }
-//}
-// void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
-//{
-//  std::lock_guard<std::mutex> lk(buffer_mutex_);
-//  // 如果缓冲区中不足一个完整包，则返回
-//  if (stream_buffer_.size() < kVideoSize)
-//    return;
-//  // 构造一个视频包
-//  rm_msgs::VideoPacket pkt;
-//  pkt.data.fill(0);
-//  pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);
-//  packet_sequence_id_++;
-//  std::memcpy(pkt.data.data() + kSeqSize, stream_buffer_.data(), kVideoSize);
-//  packet_pub_.publish(pkt);
-//  // 从缓冲区中移除已发送的数据
-//  std::memmove(stream_buffer_.data(), stream_buffer_.data() + kVideoSize, stream_buffer_.size() - kVideoSize);
-//  stream_buffer_.resize(stream_buffer_.size() - kVideoSize);
-//}
-void VideoEncoderCore::pullStreamAndPacketize()
+void VideoEncoderCore::pullStreamData()
 {
-  if (!appsink_)
-    return;
-  const int64_t window_ns = static_cast<int64_t>(bandwidth_window_s_ * 1e9);
-  const size_t window_limit_bytes = static_cast<size_t>(bandwidth_limit_kbytes_ * 1000.0 * bandwidth_window_s_);
-  const size_t max_backlog_bytes = static_cast<size_t>(bandwidth_limit_kbytes_ * 1000.0 * max_tx_delay_s_);
+ if (!appsink_)
+   return;
+ while (true)
+ {
+   GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
+   if (!sample)
+     break;
+   GstBuffer* buffer = gst_sample_get_buffer(sample);
+   if (!buffer)
+   {
+     gst_sample_unref(sample);
+     continue;
+   }
+   GstMapInfo map;
+   if (gst_buffer_map(buffer, &map, GST_MAP_READ))
+   {
+     std::lock_guard<std::mutex> lk(buffer_mutex_);
 
-  while (true)
-  {
-    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
-    if (!sample)
-      break;
-
-    GstBuffer* buffer = gst_sample_get_buffer(sample);
-    if (!buffer)
-    {
-      gst_sample_unref(sample);
-      continue;
-    }
-
-    GstMapInfo map;
-    if (gst_buffer_map(buffer, &map, GST_MAP_READ))
-    {
-      std::lock_guard<std::mutex> lk(buffer_mutex_);
-
-      size_t old = stream_buffer_.size();
-      stream_buffer_.resize(old + map.size);
-      std::memcpy(stream_buffer_.data() + old, map.data, map.size);
-
-      // 只要缓冲区有足够 kVideoSize 字节视频数据，就打包发送
-      while (stream_buffer_.size() >= kVideoSize)
-      {
-        int64_t now_ns = ros::Time::now().toNSec();
-        // 滑动带宽窗口
-        while (!sent_window_.empty() && (now_ns - sent_window_.front().first) > window_ns)
-        {
-          sent_window_bytes_ -= sent_window_.front().second;
-          sent_window_.pop_front();
-        }
-        // 带宽限制按实际网络包大小计算
-        if (sent_window_bytes_ + kPacketTotal > window_limit_bytes)
-          break;
-
-        // 构造并发送包
-        rm_msgs::VideoPacket pkt;
-        pkt.data.fill(0);
-        // 第一个字节放序列号
-        pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);
-        packet_sequence_id_++;
-        // 后续 kVideoSize 字节放视频数据
-        std::memcpy(pkt.data.data() + kSeqSize, stream_buffer_.data(), kVideoSize);
-        packet_pub_.publish(pkt);
-
-        // 记录带宽
-        sent_window_.emplace_back(now_ns, kPacketTotal);
-        sent_window_bytes_ += kPacketTotal;
-
-        // 从 stream_buffer_ 移除已发送的 kVideoSize 字节视频数据
-        std::memmove(stream_buffer_.data(), stream_buffer_.data() + kVideoSize, stream_buffer_.size() - kVideoSize);
-        stream_buffer_.resize(stream_buffer_.size() - kVideoSize);
-      }
-
-      // 背压处理：缓冲区积压超过阈值时丢掉部分数据
-      //      if (stream_buffer_.size() > max_backlog_bytes)
-      //      {
-      //        size_t target_drop = stream_buffer_.size() - max_backlog_bytes;
-      //        size_t drop_bytes = target_drop;
-      //        for (size_t i = target_drop; i + 4 < stream_buffer_.size(); ++i)
-      //        {
-      //          bool sc3 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 1;
-      //          bool sc4 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 0 &&
-      //                     stream_buffer_[i + 3] == 1;
-      //          if (sc3 || sc4)
-      //          {
-      //            drop_bytes = i;
-      //            break;
-      //          }
-      //        }
-      //        std::memmove(stream_buffer_.data(), stream_buffer_.data() + drop_bytes, stream_buffer_.size() -
-      //        drop_bytes); stream_buffer_.resize(stream_buffer_.size() - drop_bytes); dropped_bytes_ += drop_bytes;
-      //        dropped_events_++;
-      //      }
-
-      int64_t now_ns = ros::Time::now().toNSec();
-      if (now_ns - last_telemetry_ns_ > 1000000000LL)
-      {
-        double window_kb = static_cast<double>(sent_window_bytes_) / 1000.0;
-        ROS_INFO("TX stats: window=%.2f/%.2fKB avg=%.2fKB/s backlog=%zuB dropped=%luB", window_kb,
-                 static_cast<double>(window_limit_bytes) / 1000.0, window_kb / bandwidth_window_s_,
-                 stream_buffer_.size(), dropped_bytes_);
-        last_telemetry_ns_ = now_ns;
-      }
-
-      gst_buffer_unmap(buffer, &map);
-    }
-
-    gst_sample_unref(sample);
-  }
+     size_t old = stream_buffer_.size();
+     stream_buffer_.resize(old + map.size);
+     std::memcpy(stream_buffer_.data() + old, map.data, map.size);
+     gst_buffer_unmap(buffer, &map);
+   }
+   gst_sample_unref(sample);
+ }
 }
+void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
+{
+  // std::lock_guard<std::mutex> lk(buffer_mutex_);
+
+  // // 如果缓冲区中不足一个完整包，则返回
+  // if (stream_buffer_.empty()) return;
+  // // 如果排队数据超过了 2 秒钟的带宽量 (比如 30KB)，直接清空，保延迟弃画质
+  // if (stream_buffer_.size() > 30 * 1024) {
+  //     ROS_WARN("Bufferbloat detected! Clearing buffer.");
+  //     stream_buffer_.clear();
+  //     return;
+  // }
+
+  // // Lambda助手函数：寻找 H.264 起始码 00 00 00 01 或 00 00 01
+  // auto find_start_code = [](const std::vector<uint8_t>& buf, size_t start_pos) -> size_t {
+  //     for (size_t i = start_pos; i + 3 < buf.size(); ++i) {
+  //         if (buf[i] == 0 && buf[i+1] == 0 && 
+  //            ((buf[i+2] == 1) || (buf[i+2] == 0 && buf[i+3] == 1))) {
+  //             return i;
+  //         }
+  //     }
+  //     return std::string::npos; // 没找到
+  // };
+
+  // // 1. 寻找当前包的起点
+  // size_t current_start = find_start_code(stream_buffer_, 0);
+  // if (current_start == std::string::npos) {
+  //     stream_buffer_.clear(); // 全是无效杂乱数据，清理掉
+  //     return;
+  // }
+
+  // int sc_len = (stream_buffer_[current_start + 2] == 1) ? 3 : 4;
+  
+  // // 2. 寻找下一个起始码（即当前 NALU 的结束边界）
+  // size_t next_start = find_start_code(stream_buffer_, current_start + sc_len);
+  
+  // if (next_start == std::string::npos) {
+  //     // 没找到下一个起始码，说明 GStreamer 的这一片还没吐完。
+  //     // 防御机制：如果当前这片已经超过了单包载荷上限，强行截断发出去防止死锁
+  //     if (stream_buffer_.size() - current_start > static_cast<size_t>(kVideoSize)) {
+  //         next_start = current_start + kVideoSize; 
+  //     } else {
+  //         // 否则，耐心等待下一次 timer 凑齐一个完整 NALU
+  //         return; 
+  //     }
+  // }
+
+  // // 3. 计算提取出一个完整 NALU
+  // size_t nalu_size = next_start - current_start;
+  // // 兜底保护：确保复制的数据绝对不会超过预设的 Payload 容量 (kVideoSize)
+  // size_t send_size = std::min(nalu_size, static_cast<size_t>(kVideoSize));
+  // // 构造一个视频包
+  // rm_msgs::VideoPacket pkt;
+  // pkt.data.fill(0);
+  // pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);
+  // packet_sequence_id_++;
+  // std::memcpy(pkt.data.data() + kSeqSize, stream_buffer_.data() + current_start, send_size);
+  // packet_pub_.publish(pkt);
+  // // 从缓冲区中移除已发送的数据
+  // stream_buffer_.erase(stream_buffer_.begin(), stream_buffer_.begin() + next_start);
+ std::lock_guard<std::mutex> lk(buffer_mutex_);
+  // 如果缓冲区中不足一个完整包，则返回
+  if (stream_buffer_.size() < kVideoSize)
+    return;
+  // 构造一个视频包
+  rm_msgs::VideoPacket pkt;
+  pkt.data.fill(0);
+  pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);
+  packet_sequence_id_++;
+  std::memcpy(pkt.data.data() + kSeqSize, stream_buffer_.data(), kVideoSize);
+  packet_pub_.publish(pkt);
+  // 从缓冲区中移除已发送的数据
+  std::memmove(stream_buffer_.data(), stream_buffer_.data() + kVideoSize, stream_buffer_.size() - kVideoSize);
+  stream_buffer_.resize(stream_buffer_.size() - kVideoSize);
+}
+// void VideoEncoderCore::pullStreamAndPacketize()
+// {
+//   if (!appsink_)
+//     return;
+//   const int64_t window_ns = static_cast<int64_t>(bandwidth_window_s_ * 1e9);
+//   const size_t window_limit_bytes = static_cast<size_t>(bandwidth_limit_kbytes_ * 1000.0 * bandwidth_window_s_);
+//   const size_t max_backlog_bytes = static_cast<size_t>(bandwidth_limit_kbytes_ * 1000.0 * max_tx_delay_s_);
+
+//   while (true)
+//   {
+//     GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
+//     if (!sample)
+//       break;
+
+//     GstBuffer* buffer = gst_sample_get_buffer(sample);
+//     if (!buffer)
+//     {
+//       gst_sample_unref(sample);
+//       continue;
+//     }
+
+//     GstMapInfo map;
+//     if (gst_buffer_map(buffer, &map, GST_MAP_READ))
+//     {
+//       std::lock_guard<std::mutex> lk(buffer_mutex_);
+
+//       size_t old = stream_buffer_.size();
+//       stream_buffer_.resize(old + map.size);
+//       std::memcpy(stream_buffer_.data() + old, map.data, map.size);
+
+//       // 只要缓冲区有足够 kVideoSize 字节视频数据，就打包发送
+//       while (stream_buffer_.size() >= kVideoSize)
+//       {
+//         int64_t now_ns = ros::Time::now().toNSec();
+//         // 滑动带宽窗口
+//         while (!sent_window_.empty() && (now_ns - sent_window_.front().first) > window_ns)
+//         {
+//           sent_window_bytes_ -= sent_window_.front().second;
+//           sent_window_.pop_front();
+//         }
+//         // 带宽限制按实际网络包大小计算
+//         if (sent_window_bytes_ + kPacketTotal > window_limit_bytes)
+//           break;
+
+//         // 构造并发送包
+//         rm_msgs::VideoPacket pkt;
+//         pkt.data.fill(0);
+//         // 第一个字节放序列号
+//         pkt.data[0] = static_cast<uint8_t>(packet_sequence_id_ & 0xFFu);
+//         packet_sequence_id_++;
+//         // 后续 kVideoSize 字节放视频数据
+//         std::memcpy(pkt.data.data() + kSeqSize, stream_buffer_.data(), kVideoSize);
+//         packet_pub_.publish(pkt);
+
+//         // 记录带宽
+//         sent_window_.emplace_back(now_ns, kPacketTotal);
+//         sent_window_bytes_ += kPacketTotal;
+
+//         // 从 stream_buffer_ 移除已发送的 kVideoSize 字节视频数据
+//         std::memmove(stream_buffer_.data(), stream_buffer_.data() + kVideoSize, stream_buffer_.size() - kVideoSize);
+//         stream_buffer_.resize(stream_buffer_.size() - kVideoSize);
+//       }
+
+//       // 背压处理：缓冲区积压超过阈值时丢掉部分数据
+//       //      if (stream_buffer_.size() > max_backlog_bytes)
+//       //      {
+//       //        size_t target_drop = stream_buffer_.size() - max_backlog_bytes;
+//       //        size_t drop_bytes = target_drop;
+//       //        for (size_t i = target_drop; i + 4 < stream_buffer_.size(); ++i)
+//       //        {
+//       //          bool sc3 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 1;
+//       //          bool sc4 = stream_buffer_[i] == 0 && stream_buffer_[i + 1] == 0 && stream_buffer_[i + 2] == 0 &&
+//       //                     stream_buffer_[i + 3] == 1;
+//       //          if (sc3 || sc4)
+//       //          {
+//       //            drop_bytes = i;
+//       //            break;
+//       //          }
+//       //        }
+//       //        std::memmove(stream_buffer_.data(), stream_buffer_.data() + drop_bytes, stream_buffer_.size() -
+//       //        drop_bytes); stream_buffer_.resize(stream_buffer_.size() - drop_bytes); dropped_bytes_ += drop_bytes;
+//       //        dropped_events_++;
+//       //      }
+
+//       int64_t now_ns = ros::Time::now().toNSec();
+//       if (now_ns - last_telemetry_ns_ > 1000000000LL)
+//       {
+//         double window_kb = static_cast<double>(sent_window_bytes_) / 1000.0;
+        // ROS_INFO("TX stats: window=%.2f/%.2fKB avg=%.2fKB/s backlog=%zuB dropped=%luB", window_kb,
+        //          static_cast<double>(window_limit_bytes) / 1000.0, window_kb / bandwidth_window_s_,
+        //          stream_buffer_.size(), dropped_bytes_);
+//         last_telemetry_ns_ = now_ns;
+//       }
+
+//       gst_buffer_unmap(buffer, &map);
+//     }
+
+//     gst_sample_unref(sample);
+//   }
+// }
 
 void VideoEncoderCore::displayLoop()
 {

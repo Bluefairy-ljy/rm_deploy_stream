@@ -32,9 +32,9 @@ private:
   void initializeGstreamer();
   void shutdownGstreamer();
   void pushFrameToGstreamer(const cv::Mat& frame);
-//  void pullStreamData();
-//  void sendOnePacket(const ros::TimerEvent&);
-  void pullStreamAndPacketize();
+  void pullStreamData();
+  void sendOnePacket(const ros::TimerEvent&);
+  // void pullStreamAndPacketize();
   void displayLoop();
 
 private:

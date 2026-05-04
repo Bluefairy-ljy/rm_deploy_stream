@@ -8,6 +8,7 @@
 int main(int argc, char** argv)
 {
   ros::init(argc, argv, "video_decoder");
+  printf("bbb\n");
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
   rm_deploy_stream::VideoDecoderNode node(nh, pnh);
