@@ -327,31 +327,31 @@ void VideoEncoderCore::pushFrameToGstreamer(const cv::Mat& frame)
 }
 void VideoEncoderCore::pullStreamData()
 {
- if (!appsink_)
-   return;
- while (true)
- {
-   GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
-   if (!sample)
-     break;
-   GstBuffer* buffer = gst_sample_get_buffer(sample);
-   if (!buffer)
-   {
-     gst_sample_unref(sample);
-     continue;
-   }
-   GstMapInfo map;
-   if (gst_buffer_map(buffer, &map, GST_MAP_READ))
-   {
-     std::lock_guard<std::mutex> lk(buffer_mutex_);
+  if (!appsink_)
+    return;
+  while (true)
+  {
+    GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), 0);
+    if (!sample)
+      break;
+    GstBuffer* buffer = gst_sample_get_buffer(sample);
+    if (!buffer)
+    {
+      gst_sample_unref(sample);
+      continue;
+    }
+    GstMapInfo map;
+    if (gst_buffer_map(buffer, &map, GST_MAP_READ))
+    {
+      std::lock_guard<std::mutex> lk(buffer_mutex_);
 
-     size_t old = stream_buffer_.size();
-     stream_buffer_.resize(old + map.size);
-     std::memcpy(stream_buffer_.data() + old, map.data, map.size);
-     gst_buffer_unmap(buffer, &map);
-   }
-   gst_sample_unref(sample);
- }
+      size_t old = stream_buffer_.size();
+      stream_buffer_.resize(old + map.size);
+      std::memcpy(stream_buffer_.data() + old, map.data, map.size);
+      gst_buffer_unmap(buffer, &map);
+    }
+    gst_sample_unref(sample);
+  }
 }
 void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
 {
@@ -369,7 +369,7 @@ void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
   // // Lambda助手函数：寻找 H.264 起始码 00 00 00 01 或 00 00 01
   // auto find_start_code = [](const std::vector<uint8_t>& buf, size_t start_pos) -> size_t {
   //     for (size_t i = start_pos; i + 3 < buf.size(); ++i) {
-  //         if (buf[i] == 0 && buf[i+1] == 0 && 
+  //         if (buf[i] == 0 && buf[i+1] == 0 &&
   //            ((buf[i+2] == 1) || (buf[i+2] == 0 && buf[i+3] == 1))) {
   //             return i;
   //         }
@@ -385,18 +385,18 @@ void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
   // }
 
   // int sc_len = (stream_buffer_[current_start + 2] == 1) ? 3 : 4;
-  
+
   // // 2. 寻找下一个起始码（即当前 NALU 的结束边界）
   // size_t next_start = find_start_code(stream_buffer_, current_start + sc_len);
-  
+
   // if (next_start == std::string::npos) {
   //     // 没找到下一个起始码，说明 GStreamer 的这一片还没吐完。
   //     // 防御机制：如果当前这片已经超过了单包载荷上限，强行截断发出去防止死锁
   //     if (stream_buffer_.size() - current_start > static_cast<size_t>(kVideoSize)) {
-  //         next_start = current_start + kVideoSize; 
+  //         next_start = current_start + kVideoSize;
   //     } else {
   //         // 否则，耐心等待下一次 timer 凑齐一个完整 NALU
-  //         return; 
+  //         return;
   //     }
   // }
 
@@ -413,7 +413,7 @@ void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
   // packet_pub_.publish(pkt);
   // // 从缓冲区中移除已发送的数据
   // stream_buffer_.erase(stream_buffer_.begin(), stream_buffer_.begin() + next_start);
- std::lock_guard<std::mutex> lk(buffer_mutex_);
+  std::lock_guard<std::mutex> lk(buffer_mutex_);
   // 如果缓冲区中不足一个完整包，则返回
   if (stream_buffer_.size() < kVideoSize)
     return;
@@ -516,9 +516,9 @@ void VideoEncoderCore::sendOnePacket(const ros::TimerEvent&)
 //       if (now_ns - last_telemetry_ns_ > 1000000000LL)
 //       {
 //         double window_kb = static_cast<double>(sent_window_bytes_) / 1000.0;
-        // ROS_INFO("TX stats: window=%.2f/%.2fKB avg=%.2fKB/s backlog=%zuB dropped=%luB", window_kb,
-        //          static_cast<double>(window_limit_bytes) / 1000.0, window_kb / bandwidth_window_s_,
-        //          stream_buffer_.size(), dropped_bytes_);
+// ROS_INFO("TX stats: window=%.2f/%.2fKB avg=%.2fKB/s backlog=%zuB dropped=%luB", window_kb,
+//          static_cast<double>(window_limit_bytes) / 1000.0, window_kb / bandwidth_window_s_,
+//          stream_buffer_.size(), dropped_bytes_);
 //         last_telemetry_ns_ = now_ns;
 //       }
 
